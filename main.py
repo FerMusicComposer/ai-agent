@@ -21,20 +21,50 @@ if not core.user_prompt:
     print("A prompt must be provided.")
     sys.exit(1)
 
-response = client.models.generate_content(
-    model=core.model,
-    contents=core.messages,
-    config=types.GenerateContentConfig(tools=[core.available_functions], system_instruction=core.system_prompt)
-)
+MAX_ITERATIONS = 20
 
-if verbose:
-    print(f"User prompt:\n{core.user_prompt}")
-    print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-    print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+print(f"User prompt:\n{core.user_prompt}")
 
-if response.function_calls is not None:
-    for function_call_part in response.function_calls:
-        function_call_result = call_function(function_call_part, verbose)
-        print(f"-> {function_call_result.parts[0].function_response.response}")
+for i in range(MAX_ITERATIONS):
+    if verbose:
+        print(f"\n --- Agent Iteration {i + 1}/{MAX_ITERATIONS} --- \n")
+
+    response = client.models.generate_content(
+        model=core.model,
+        contents=core.messages,
+        config=types.GenerateContentConfig(tools=[core.available_functions], system_instruction=core.system_prompt)
+    )
+
+    if verbose:
+        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
+        print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+
+    func_called_this_iteration = False
+
+    if response.candidates:
+        for candidate in response.candidates:
+            if candidate.content:
+                core.messages.append(candidate.content)
+            
+            if response.function_calls:
+                for function_call_part in response.function_calls: 
+                    func_called_this_iteration = True
+                    function_call_result = call_function(function_call_part, verbose)
+                    core.messages.append(function_call_result)
+
+                    if verbose:
+                        response_content = function_call_result.parts[0].function_response.response if function_call_result.parts else "No response parts"
+                        print(f"-> {response_content}")
+
+    if not func_called_this_iteration:
+        if response.text:
+            print(f"\nFinal Response:\n{response.text}")
+            break
+        else:
+            print("\nAgent finished without a clear text response or function call in the last iteration.")
+            break
+    
 else:
-    print(f"Response:\n{response.text}")
+    print(f"\nMax iterations ({MAX_ITERATIONS}) reached. Agent stopped.")
+    if core.messages and core.messages[-1].parts and core.messages[-1].parts[0].text:
+        print(f"Last LLM message:\n{core.messages[-1].parts[0].text}")
